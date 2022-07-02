@@ -27,6 +27,7 @@
 #include <filament/View.h>
 
 #include <utils/EntityManager.h>
+#include <utils/Path.h>
 
 #include "FullScreenTriangle.h"
 
@@ -35,10 +36,16 @@ using namespace filament::math;
 using utils::Entity;
 using utils::EntityManager;
 
+namespace gltfio {
+    class AssetLoader;
+    class MaterialProvider;
+    class FilamentAsset;
+}
+
 class FilamentApp {
 public:
 
-    FilamentApp(void* nativeLayer, uint32_t width, uint32_t height);
+    FilamentApp(void* nativeLayer, uint32_t width, uint32_t height, const utils::Path& resourcePath);
     ~FilamentApp();
     FilamentApp(const FilamentApp&) = delete;
     FilamentApp& operator=(const FilamentApp&) = delete;
@@ -52,6 +59,7 @@ public:
 
     void render(const FilamentArFrame& frame);
     void setObjectTransform(const mat4f& transform);
+    void setObjectScale(float scale);
 
     struct FilamentArPlaneGeometry {
         mat4f transform;
@@ -74,6 +82,7 @@ private:
 
     void* nativeLayer = nullptr;
     uint32_t width, height;
+    const utils::Path resourcePath;
 
     Engine* engine = nullptr;
     Renderer* renderer = nullptr;
@@ -99,6 +108,10 @@ private:
         IndexBuffer* planeIndices = nullptr;
         Entity planeGeometry;
         Material* shadowPlane = nullptr;
+
+        gltfio::AssetLoader* assetLoader;
+        gltfio::MaterialProvider* materialProvider;
+        gltfio::FilamentAsset* asset;
     } app;
 
 };

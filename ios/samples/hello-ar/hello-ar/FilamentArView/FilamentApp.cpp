@@ -27,7 +27,12 @@
 #include <filameshio/MeshReader.h>
 #include <geometry/SurfaceOrientation.h>
 #include <image/KtxUtility.h>
+#include <gltfio/AssetLoader.h>
+#include <gltfio/ResourceLoader.h>
+#include <gltfio/Animator.h>
 
+#include <fstream>
+#include <iostream>
 #include <sstream>
 
 // This file is generated via the "Run Script" build phase and contains the mesh, materials, and IBL
@@ -36,10 +41,12 @@
 
 using namespace filamesh;
 
-static constexpr float OBJECT_SCALE = 0.02f;
+#define use_gltf 0
 
-FilamentApp::FilamentApp(void* nativeLayer, uint32_t width, uint32_t height)
-        : nativeLayer(nativeLayer), width(width), height(height) {
+/* static constexpr  */float OBJECT_SCALE = 0.02f /* 0.0002f */;
+
+FilamentApp::FilamentApp(void* nativeLayer, uint32_t width, uint32_t height, const utils::Path& resourcePath)
+        : nativeLayer(nativeLayer), width(width), height(height), resourcePath(resourcePath) {
     setupFilament();
     setupCameraFeedTriangle();
     setupIbl();
@@ -73,6 +80,10 @@ void FilamentApp::render(const FilamentArFrame& frame) {
 
 void FilamentApp::setObjectTransform(const mat4f& transform) {
     meshTransform = transform;
+}
+
+void FilamentApp::setObjectScale(float scale){
+    OBJECT_SCALE *= scale;
 }
 
 void FilamentApp::updatePlaneGeometry(const FilamentArPlaneGeometry& geometry) {
@@ -234,12 +245,46 @@ void FilamentApp::setupMaterial() {
 }
 
 void FilamentApp::setupMesh() {
+    
+#if use_gltf
+    app.materialProvider = gltfio::createUbershaderLoader(engine);
+    app.assetLoader = gltfio::AssetLoader::create({engine, app.materialProvider, nullptr});
+#else
     MeshReader::Mesh mesh = MeshReader::loadMeshFromBuffer(engine, RESOURCES_CUBE_DATA,
             nullptr, nullptr, app.materialInstance);
     app.materialInstance->setParameter("baseColor", RgbType::sRGB, {0.71f, 0.0f, 0.0f});
+#endif
 
+#if use_gltf
+    // Load the glTF file.
+    std::ifstream in(resourcePath.concat(utils::Path("yao.glb")), std::ifstream::in);
+    if (!in.is_open())
+    {
+        std::cerr << "error open glb file!" << std::endl;
+    }
+    in.seekg(0, std::ios::end);
+    std::ifstream::pos_type size = in.tellg();
+    printf("file size %d\n", size);
+    in.seekg(0);
+    std::vector<uint8_t> buffer(size);
+    if (!in.read((char*) buffer.data(), size)) {
+        std::cerr << "Unable to read scene.gltf" << std::endl;
+        exit(1);
+    }
+    app.asset = app.assetLoader->createAssetFromBinary(buffer.data(), static_cast<uint32_t>(size));
+
+    gltfio::ResourceLoader({
+        .engine = engine,
+        .normalizeSkinningWeights = true,
+        .recomputeBoundingBoxes = false
+    }).loadResources(app.asset);
+
+    app.renderable = app.asset->getRoot();
+    scene->addEntities(app.asset->getEntities(), app.asset->getEntityCount());
+#else
     app.renderable = mesh.renderable;
     scene->addEntity(app.renderable);
+#endif
 
     // Allow the mesh to cast shadows onto the shadow plane.
     auto& rcm = engine->getRenderableManager();
@@ -249,8 +294,11 @@ void FilamentApp::setupMesh() {
     auto& tcm = engine->getTransformManager();
     tcm.create(app.renderable);
     auto i = tcm.getInstance(app.renderable);
-    tcm.setTransform(i,
+    /* tcm.setTransform(i,
             mat4f::translation(float3{0.0f, 0.0f, -2.0f}) *
+            mat4f::scaling(OBJECT_SCALE)); */
+    tcm.setTransform(i,
+            mat4f::translation(float3{10.0f, 10.0f, 1.5f}) *
             mat4f::scaling(OBJECT_SCALE));
 }
 

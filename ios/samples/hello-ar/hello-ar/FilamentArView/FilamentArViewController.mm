@@ -73,7 +73,9 @@
 
     [self.view addSubview:self.accInfoLabel];
 
-    app = new FilamentApp((__bridge void*) self.view.layer, nativeWidth, nativeHeight);
+    NSString* resourcePath = [NSBundle mainBundle].bundlePath;
+    app = new FilamentApp((__bridge void*) self.view.layer, nativeWidth, nativeHeight, 
+        utils::Path([resourcePath cStringUsingEncoding:NSUTF8StringEncoding]));
 
     self.session = [ARSession new];
     self.session.delegate = self;
@@ -84,6 +86,10 @@
 
     tapRecognizer.numberOfTapsRequired = 1;
     [self.view addGestureRecognizer:tapRecognizer];
+
+    UIPinchGestureRecognizer *pinchGestureRecognizer =
+            [[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(handlePinch:)];
+    [self.view addGestureRecognizer:pinchGestureRecognizer];
 }
 
 - (void)viewWillAppear:(BOOL)animated
@@ -174,7 +180,7 @@ double last_img_time = 0;
 
     const auto& transform = frame.camera.transform;
     px = transform.columns[3][0], py = transform.columns[3][1], pz = transform.columns[3][2]; 
-    printf_matrix44(frame.camera.transform, "camera transform");
+    // printf_matrix44(frame.camera.transform, "camera transform");
 
     TS(t_render);
     // frame.camera.transform gives a camera transform matrix assuming a landscape-right orientation.
@@ -214,16 +220,52 @@ double last_img_time = 0;
         return;
     }
 
+    CGPoint point = [sender locationInView:self.view];
+    double u = point.x / self.view.bounds.size.width;
+    double v = point.y / self.view.bounds.size.height;
+    
+    int bufferWidth = (int)CVPixelBufferGetWidthOfPlane(currentFrame.capturedImage,0);
+    int bufferHeight = (int)CVPixelBufferGetHeightOfPlane(currentFrame.capturedImage, 0);
+    int bytePerRow = (int)CVPixelBufferGetBytesPerRowOfPlane(currentFrame.capturedImage, 0);
+    // printf("arkit byte image size: %d %d %d\n", bufferWidth, bufferHeight, bytePerRow);
+    CGPoint image_point;
+    /* image_point.x = v * bufferWidth;
+    image_point.y = (1-u) * bufferHeight; */
+    image_point.x = v;
+    image_point.y = (1-u);
+
+    // printf("view point %.3f %.3f, image point %.3f %.3f\n", point.x, point.y, image_point.x, image_point.y);
+    
+    NSArray<ARHitTestResult *> *result = [currentFrame hitTest:image_point types:ARHitTestResultTypeExistingPlaneUsingExtent];
+    if (result.count == 0) {
+        printf("no hit result???\n");
+        return;
+    }
+    printf("hit result num %d\n", result.count);
+
+    // If there are multiple hits, just pick the closest plane
+    ARHitTestResult * hitResult = [result firstObject];
+    mat4f objectTransform = FILAMENT_MAT4F_FROM_SIMD(hitResult.worldTransform);
+    
     // Create a transform 0.2 meters in front of the camera.
-    mat4f viewTransform = FILAMENT_MAT4F_FROM_SIMD(currentFrame.camera.transform);
+    /* mat4f viewTransform = FILAMENT_MAT4F_FROM_SIMD(currentFrame.camera.transform);
     mat4f objectTranslation = mat4f::translation(float3{0.f, 0.f, -.2f});
-    mat4f objectTransform = viewTransform * objectTranslation;
+    mat4f objectTransform = viewTransform * objectTranslation; */
 
     app->setObjectTransform(objectTransform);
 
-    simd_float4x4 simd_transform = SIMD_FLOAT4X4_FROM_FILAMENT(objectTransform);
-    self.anchor = [[ARAnchor alloc] initWithName:@"object" transform:simd_transform];
-    [self.session addAnchor:self.anchor];
+   simd_float4x4 simd_transform = SIMD_FLOAT4X4_FROM_FILAMENT(objectTransform);
+   self.anchor = [[ARAnchor alloc] initWithName:@"object" transform:simd_transform];
+   [self.session addAnchor:self.anchor];
+}
+
+- (void) handlePinch:(UIPinchGestureRecognizer*) recognizer
+{
+    if (recognizer.state ==UIGestureRecognizerStateChanged &&
+        recognizer.numberOfTouches == 2)
+    {
+        app->setObjectScale((recognizer.scale - 1.0) / 50 + 1.0);
+    }
 }
 
 - (void)session:(ARSession *)session didUpdateAnchors:(NSArray<ARAnchor*>*)anchors
