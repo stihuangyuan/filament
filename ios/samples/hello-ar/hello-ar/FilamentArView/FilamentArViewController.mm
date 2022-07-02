@@ -22,6 +22,8 @@
 
 #import <ARKit/ARKit.h>
 
+#import "basic_define.h"
+
 #define METAL_AVAILABLE __has_include(<QuartzCore/CAMetalLayer.h>)
 
 #if !METAL_AVAILABLE
@@ -37,9 +39,23 @@
 // The most recent anchor placed via a tap on the screen.
 @property (nonatomic, strong) ARAnchor* anchor;
 
+@property (nonatomic, strong) UILabel *accInfoLabel;
+
 @end
 
 @implementation FilamentArViewController
+
+- (UILabel *)accInfoLabel
+{
+    if (!_accInfoLabel) {
+        CGRect frame = CGRectMake(self.view.bounds.size.width - 250, 0, 400, 290);
+        _accInfoLabel = [[UILabel alloc] initWithFrame:frame];
+        _accInfoLabel.textAlignment = NSTextAlignmentLeft;
+        _accInfoLabel.numberOfLines = 0;
+        _accInfoLabel.textColor = [UIColor redColor];
+    }
+    return _accInfoLabel;
+}
 
 - (void)viewDidLoad
 {
@@ -54,6 +70,9 @@
     nativeWidth = nativeHeight;
     nativeHeight = tmp;
 #endif
+
+    [self.view addSubview:self.accInfoLabel];
+
     app = new FilamentApp((__bridge void*) self.view.layer, nativeWidth, nativeHeight);
 
     self.session = [ARSession new];
@@ -90,20 +109,48 @@
 
 #pragma mark ARSessionDelegate
 
+#define use_portrait 1
+
+void printf_matrix44(const simd_float4x4& mat, const std::string& header)
+{
+    printf("%s:\n%.6f %.6f %.6f %.6f\n%.6f %.6f %.6f %.6f\n%.6f %.6f %.6f %.6f\n%.6f %.6f %.6f %.6f\n",
+        header.c_str(), 
+        mat.columns[0][0], mat.columns[1][0], mat.columns[2][0], mat.columns[3][0],
+        mat.columns[0][1], mat.columns[1][1], mat.columns[2][1], mat.columns[3][1],
+        mat.columns[0][2], mat.columns[1][2], mat.columns[2][2], mat.columns[3][2],
+        mat.columns[0][3], mat.columns[1][3], mat.columns[2][3], mat.columns[3][3]
+    );
+}
+
+struct Data50<30> fps_data50, algo_data50, render_data50;
+float avg_algo_cost, avg_render_cost, avg_fps;
+float px, py, pz;
+
+double last_img_time = 0;
 - (void)session:(ARSession *)session didUpdateFrame:(ARFrame *)frame
 {
+    double curr_img_time = frame.timestamp;
+    
     // The height and width are flipped for the viewport because we're requesting transforms in the
     // UIInterfaceOrientationLandscapeRight orientation (landscape, home button on the right-hand
     // side).
     CGRect nativeBounds = [[UIScreen mainScreen] nativeBounds];
+#if use_portrait
+    CGSize viewport = CGSizeMake(nativeBounds.size.width, nativeBounds.size.height);
+#else
     CGSize viewport = CGSizeMake(nativeBounds.size.height, nativeBounds.size.width);
+#endif
 
     // This transform gets applied to the UV coordinates of the full-screen triangle used to render
     // the camera feed. We want the inverse because we're applying the transform to the UV
     // coordinates, not the image itself.
     // (See camera_feed.mat and FullScreenTriangle.cpp)
     CGAffineTransform displayTransform =
+#if use_portrait
+            [frame displayTransformForOrientation:UIInterfaceOrientationPortrait
+#else
             [frame displayTransformForOrientation:UIInterfaceOrientationLandscapeRight
+#endif
                                      viewportSize:viewport];
     CGAffineTransform transformInv = CGAffineTransformInvert(displayTransform);
     mat3f textureTransform(transformInv.a, transformInv.b, 0,
@@ -111,19 +158,49 @@
                            transformInv.tx, transformInv.ty, 1);
 
     const auto& projection =
+#if use_portrait
+            [frame.camera projectionMatrixForOrientation:UIInterfaceOrientationPortrait
+#else
             [frame.camera projectionMatrixForOrientation:UIInterfaceOrientationLandscapeRight
+#endif
                                             viewportSize:viewport
                                                    zNear: 0.01f
                                                     zFar:10.00f];
 
+#if use_portrait
+    auto viewMatrix = [frame.camera viewMatrixForOrientation:UIInterfaceOrientationPortrait];
+    auto cameraTransformMatrix = simd_inverse(viewMatrix);
+#endif
+
+    const auto& transform = frame.camera.transform;
+    px = transform.columns[3][0], py = transform.columns[3][1], pz = transform.columns[3][2]; 
+    printf_matrix44(frame.camera.transform, "camera transform");
+
+    TS(t_render);
     // frame.camera.transform gives a camera transform matrix assuming a landscape-right orientation.
     // For simplicity, the app's orientation is locked to UIInterfaceOrientationLandscapeRight.
     app->render(FilamentApp::FilamentArFrame {
         .cameraImage = (void*) frame.capturedImage,
         .cameraTextureTransform = textureTransform,
         .projection = FILAMENT_MAT4_FROM_SIMD(projection),
+#if use_portrait
+        .view = FILAMENT_MAT4F_FROM_SIMD(cameraTransformMatrix)
+#else
         .view = FILAMENT_MAT4F_FROM_SIMD(frame.camera.transform)
+#endif
     });
+    float render_cost = TE(t_render);
+    avg_render_cost = render_data50.addData(render_cost);
+
+    float time_diff = curr_img_time - last_img_time;
+    float fps = 1.0 / time_diff;
+    avg_fps = fps_data50.addData(fps);
+    last_img_time = curr_img_time;
+
+    NSString *stemp = [NSString stringWithFormat:@"FPS %.2f\n\n算法耗时 %.2f ms\n\n渲染耗时 %.2f ms\n\np: %.3f %.3f %.3f", 
+            avg_fps, avg_algo_cost, avg_render_cost, 
+            px, py, pz];
+    _accInfoLabel.text = stemp;
 }
 
 - (void)handleTap:(UITapGestureRecognizer*)sender

@@ -55,7 +55,7 @@ void FilamentApp::render(const FilamentArFrame& frame) {
     camera->setCustomProjection(frame.projection, 0.01, 10);
 
     // Rotate the mesh a little bit each frame.
-    meshRotation *= quatf::fromAxisAngle(float3{1.0f, 0.5f, 0.2f}, 0.05);
+    // meshRotation *= quatf::fromAxisAngle(float3{1.0f, 0.5f, 0.2f}, 0.05);
 
     // Update the mesh's transform.
     auto& tcm = engine->getTransformManager();
